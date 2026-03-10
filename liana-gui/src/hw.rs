@@ -12,7 +12,7 @@ use async_hwi::{
     bitbox::{api::runtime, BitBox02, PairingBitbox02},
     coldcard,
     jade::{self, Jade},
-    ledger, specter, DeviceKind, Error as HWIError, Version, HWI,
+    ledger, specter, vanadium, DeviceKind, Error as HWIError, Version, HWI,
 };
 use iced::futures::{SinkExt, Stream};
 use liana::miniscript::bitcoin::{bip32::Fingerprint, hashes::hex::FromHex, Network};
@@ -510,13 +510,15 @@ fn refresh(mut state: State) -> impl Stream<Item = HardwareWalletMessage> {
                 Err(e) => warn!("Error while listing jade devices: {}", e),
             }
 
-            match ledger::LedgerSimulator::try_connect().await {
+            let mut found_vanadium = false;
+            match vanadium::Vanadium::try_connect(None).await {
                 Ok(device) => {
-                    let id = "ledger-simulator".to_string();
+                    found_vanadium = true;
+                    let id = "vanadium".to_string();
                     if state.connected_supported_hws.contains(&id) {
                         still.push(id);
                     } else {
-                        match handle_ledger_device(
+                        match handle_vanadium_device(
                             id,
                             device,
                             state.wallet.as_ref().map(|w| w.as_ref()),
@@ -536,6 +538,38 @@ fn refresh(mut state: State) -> impl Stream<Item = HardwareWalletMessage> {
                 Err(HWIError::DeviceNotFound) => {}
                 Err(e) => {
                     debug!("{}", e);
+                }
+            }
+
+            // Disabled if vanadium is detected (currently conflicting)
+            if !found_vanadium {
+                match ledger::LedgerSimulator::try_connect().await {
+                    Ok(device) => {
+                        let id = "ledger-simulator".to_string();
+                        if state.connected_supported_hws.contains(&id) {
+                            still.push(id);
+                        } else {
+                            match handle_ledger_device(
+                                id,
+                                device,
+                                state.wallet.as_ref().map(|w| w.as_ref()),
+                                &state.keys_aliases,
+                            )
+                            .await
+                            {
+                                Ok(hw) => {
+                                    hws.push(hw);
+                                }
+                                Err(e) => {
+                                    warn!("{:?}", e);
+                                }
+                            }
+                        }
+                    }
+                    Err(HWIError::DeviceNotFound) => {}
+                    Err(e) => {
+                        debug!("{}", e);
+                    }
                 }
             }
 
@@ -636,37 +670,40 @@ fn refresh(mut state: State) -> impl Stream<Item = HardwareWalletMessage> {
                     }
                 }
             }
-            for detected in ledger::Ledger::<ledger::TransportHID>::enumerate(api) {
-                let id = format!(
-                    "ledger-{:?}-{}-{}",
-                    detected.path(),
-                    detected.vendor_id(),
-                    detected.product_id()
-                );
-                if state.connected_supported_hws.contains(&id) {
-                    still.push(id);
-                    continue;
-                }
+            // Disabled if vanadium is detected (currently conflicting)
+            if !found_vanadium {
+                for detected in ledger::Ledger::<ledger::TransportHID>::enumerate(api) {
+                    let id = format!(
+                        "ledger-{:?}-{}-{}",
+                        detected.path(),
+                        detected.vendor_id(),
+                        detected.product_id()
+                    );
+                    if state.connected_supported_hws.contains(&id) {
+                        still.push(id);
+                        continue;
+                    }
 
-                match ledger::Ledger::<ledger::TransportHID>::connect(api, detected) {
-                    Ok(device) => match handle_ledger_device(
-                        id,
-                        device,
-                        state.wallet.as_ref().map(|w| w.as_ref()),
-                        &state.keys_aliases,
-                    )
-                    .await
-                    {
-                        Ok(hw) => {
-                            hws.push(hw);
-                        }
+                    match ledger::Ledger::<ledger::TransportHID>::connect(api, detected) {
+                        Ok(device) => match handle_ledger_device(
+                            id,
+                            device,
+                            state.wallet.as_ref().map(|w| w.as_ref()),
+                            &state.keys_aliases,
+                        )
+                        .await
+                        {
+                            Ok(hw) => {
+                                hws.push(hw);
+                            }
+                            Err(e) => {
+                                warn!("{:?}", e);
+                            }
+                        },
+                        Err(HWIError::DeviceNotFound) => {}
                         Err(e) => {
-                            warn!("{:?}", e);
+                            debug!("{}", e);
                         }
-                    },
-                    Err(HWIError::DeviceNotFound) => {}
-                    Err(e) => {
-                        debug!("{}", e);
                     }
                 }
             }
@@ -710,6 +747,37 @@ fn refresh(mut state: State) -> impl Stream<Item = HardwareWalletMessage> {
                 }))
                 .await;
         }
+    })
+}
+
+async fn handle_vanadium_device<'a>(
+    id: String,
+    mut device: vanadium::Vanadium,
+    wallet: Option<&'a Wallet>,
+    keys_aliases: &'a HashMap<Fingerprint, String>,
+) -> Result<HardwareWallet, HWIError> {
+    let fingerprint = device.get_master_fingerprint().await?;
+    let mut registered = false;
+    if let Some(w) = &wallet {
+        if let Some(cfg) = w
+            .hardware_wallets
+            .iter()
+            .find(|cfg| cfg.fingerprint == fingerprint)
+        {
+            device = device
+                .with_wallet(&w.name, &w.main_descriptor.to_string(), Some(cfg.token()))
+                .expect("Configuration must be correct");
+            registered = true;
+        }
+    }
+    Ok(HardwareWallet::Supported {
+        id,
+        kind: DeviceKind::Vanadium,
+        fingerprint,
+        device: Arc::new(device),
+        version: None,
+        registered: Some(registered),
+        alias: keys_aliases.get(&fingerprint).cloned(),
     })
 }
 
@@ -879,7 +947,7 @@ fn ledger_version_supported(version: &Version) -> bool {
 
 // Kind and minimal version of devices supporting tapminiscript.
 // We cannot use a lazy_static HashMap yet, because DeviceKind does not implement Hash.
-const DEVICES_COMPATIBLE_WITH_TAPMINISCRIPT: [(DeviceKind, Option<Version>); 5] = [
+const DEVICES_COMPATIBLE_WITH_TAPMINISCRIPT: [(DeviceKind, Option<Version>); 6] = [
     (
         DeviceKind::Ledger,
         Some(Version {
@@ -909,6 +977,7 @@ const DEVICES_COMPATIBLE_WITH_TAPMINISCRIPT: [(DeviceKind, Option<Version>); 5] 
             prerelease: None,
         }),
     ),
+    (DeviceKind::Vanadium, None),
 ];
 
 pub fn min_taproot_version(kind: &DeviceKind) -> Option<Version> {

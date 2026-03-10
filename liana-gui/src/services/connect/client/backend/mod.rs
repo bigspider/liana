@@ -255,6 +255,7 @@ impl BackendClient {
         let ledger_kinds = [
             async_hwi::DeviceKind::Ledger.to_string(),
             async_hwi::DeviceKind::LedgerSimulator.to_string(),
+            async_hwi::DeviceKind::Vanadium.to_string(),
         ];
         for cfg in hws {
             if ledger_kinds.contains(&cfg.kind)
