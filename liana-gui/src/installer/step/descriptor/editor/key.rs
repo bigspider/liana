@@ -1561,6 +1561,33 @@ pub async fn get_extended_pubkey(
     }))
 }
 
+/// Like `get_extended_pubkey`, but also requests an identity signature from the device.
+/// Returns the xpub string with `?identity_pk=<hex>&identity_sig=<hex>` appended.
+pub async fn get_signed_extended_pubkey(
+    hw: std::sync::Arc<dyn async_hwi::HWI + Send + Sync>,
+    fingerprint: Fingerprint,
+    network: Network,
+    account: ChildNumber,
+) -> Result<String, Error> {
+    let derivation_path = derivation_path(network, account);
+    let (xkey, identity_sig) = hw
+        .get_signed_extended_pubkey(&derivation_path, 0)
+        .await
+        .map_err(Error::from)?;
+    let dpk = DescriptorPublicKey::XPub(DescriptorXKey {
+        origin: Some((fingerprint, derivation_path)),
+        derivation_path: DerivationPath::master(),
+        wildcard: Wildcard::None,
+        xkey,
+    });
+    Ok(format!(
+        "{}?identity_pk={}&identity_sig={}",
+        dpk,
+        hex::encode(&identity_sig.identity_pubkey),
+        hex::encode(&identity_sig.signature),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::utils::default_derivation_path;

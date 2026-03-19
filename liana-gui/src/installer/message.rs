@@ -59,6 +59,8 @@ pub enum Message {
     DefineNode(DefineNode),
     DefineDescriptor(DefineDescriptor),
     ImportXpub(Fingerprint, Result<DescriptorPublicKey, Error>),
+    ImportSignedXpub(Fingerprint, Result<String, Error>),
+    ToggleIdentitySigning(Fingerprint, bool),
     HardwareWallets(HardwareWalletMessage),
     HardwareWalletUpdate,
     WalletRegistered(Result<(Fingerprint, Option<[u8; 32]>), Error>),

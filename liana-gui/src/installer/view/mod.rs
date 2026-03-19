@@ -486,6 +486,7 @@ pub fn hardware_wallet_xpubs<'a>(
     processing: bool,
     error: Option<&Error>,
     accounts: &HashMap<Fingerprint, ChildNumber>,
+    sign_with_identity: bool,
 ) -> Element<'a, Message> {
     let mut bttn = Button::new(match hw {
         HardwareWallet::Supported {
@@ -538,10 +539,22 @@ pub fn hardware_wallet_xpubs<'a>(
     if !processing && hw.is_supported() {
         bttn = bttn.on_press(Message::Select(i));
     }
+    let identity_checkbox = if hw.is_supported() {
+        hw.fingerprint().map(|fg| {
+            Container::new(
+                checkbox("Sign with your identity key", sign_with_identity)
+                    .on_toggle(move |v| Message::ToggleIdentitySigning(fg, v)),
+            )
+            .padding(10)
+        })
+    } else {
+        None
+    };
     Container::new(
         Column::new()
             .push_maybe(error.map(|e| card::warning(e.to_string()).width(Length::Fill)))
             .push(bttn)
+            .push_maybe(identity_checkbox)
             .push_maybe(if xpubs.is_none() {
                 None
             } else {

@@ -17,7 +17,10 @@ use crate::{
     hw::{HardwareWallet, HardwareWallets},
     installer::{
         message::Message,
-        step::{descriptor::editor::key::get_extended_pubkey, Context, Step},
+        step::{
+            descriptor::editor::key::{get_extended_pubkey, get_signed_extended_pubkey},
+            Context, Step,
+        },
         view, Error,
     },
     signer::Signer,
@@ -29,6 +32,7 @@ pub struct HardwareWalletXpubs {
     xpubs: Vec<String>,
     processing: bool,
     error: Option<Error>,
+    sign_with_identity: bool,
 }
 
 pub struct SignerXpubs {
@@ -113,6 +117,34 @@ impl Step for ShareXpubs {
                     }
                 }
             }
+            Message::ImportSignedXpub(fg, res) => {
+                if let Some(hw_xpubs) = self.hw_xpubs.iter_mut().find(|x| x.fingerprint == fg) {
+                    hw_xpubs.processing = false;
+                    match res {
+                        Err(e) => {
+                            hw_xpubs.error = e.into();
+                        }
+                        Ok(xpub_str) => {
+                            hw_xpubs.error = None;
+                            hw_xpubs.xpubs = vec![xpub_str];
+                        }
+                    }
+                }
+            }
+            Message::ToggleIdentitySigning(fg, value) => {
+                if let Some(hw_xpubs) = self.hw_xpubs.iter_mut().find(|x| x.fingerprint == fg) {
+                    hw_xpubs.sign_with_identity = value;
+                    hw_xpubs.xpubs.clear();
+                } else {
+                    self.hw_xpubs.push(HardwareWalletXpubs {
+                        fingerprint: fg,
+                        xpubs: Vec::new(),
+                        processing: false,
+                        error: None,
+                        sign_with_identity: value,
+                    });
+                }
+            }
             Message::ExportXpub(xpub_str) => {
                 if self.modal.is_none() {
                     let modal = ExportModal::new(None, ImportExportType::ExportXpub(xpub_str));
@@ -165,7 +197,32 @@ impl Step for ShareXpubs {
                             xpubs: Vec::new(),
                             processing: true,
                             error: None,
+                            sign_with_identity: false,
                         });
+                    }
+                    let use_identity = self
+                        .hw_xpubs
+                        .iter()
+                        .find(|x| x.fingerprint == fingerprint)
+                        .map_or(false, |x| x.sign_with_identity);
+                    if use_identity {
+                        return Task::perform(
+                            async move {
+                                (
+                                    fingerprint,
+                                    get_signed_extended_pubkey(
+                                        device,
+                                        fingerprint,
+                                        network,
+                                        account,
+                                    )
+                                    .await,
+                                )
+                            },
+                            |(fingerprint, res)| {
+                                Message::ImportSignedXpub(fingerprint, res)
+                            },
+                        );
                     }
                     return Task::perform(
                         async move {
@@ -225,9 +282,10 @@ impl Step for ShareXpubs {
                             hw_xpubs.processing,
                             hw_xpubs.error.as_ref(),
                             &self.accounts,
+                            hw_xpubs.sign_with_identity,
                         )
                     } else {
-                        view::hardware_wallet_xpubs(i, hw, None, false, None, &self.accounts)
+                        view::hardware_wallet_xpubs(i, hw, None, false, None, &self.accounts, false)
                     }
                 })
                 .collect(),
