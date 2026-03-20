@@ -287,6 +287,8 @@ pub struct LianaWalletSettings {
     pub fiat_price: Option<fiat::PriceSetting>,
     #[serde(default)]
     pub contacts: Vec<ContactSetting>,
+    #[serde(default)]
+    pub identity_keys: Vec<IdentityKeySetting>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -306,6 +308,14 @@ pub struct ContactRegistration {
     pub registration_id: String,
     /// Hex-encoded 32-byte proof of registration.
     pub proof: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IdentityKeySetting {
+    /// Fingerprint of the signing device that owns this identity key.
+    pub device_fingerprint: Fingerprint,
+    /// Hex-encoded compressed public key (66 characters).
+    pub pubkey: String,
 }
 
 impl LianaWalletSettings {

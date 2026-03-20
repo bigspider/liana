@@ -13,7 +13,10 @@ use crate::{
         error::Error,
         menu::Menu,
         message::Message,
-        settings::{update_settings_file, ContactRegistration, ContactSetting, LianaSettings},
+        settings::{
+            update_settings_file, ContactRegistration, ContactSetting, IdentityKeySetting,
+            LianaSettings,
+        },
         state::State,
         view,
         wallet::Wallet,
@@ -28,27 +31,33 @@ pub struct ContactsPanel {
     wallet: Arc<Wallet>,
     network: Network,
     contacts: Vec<ContactSetting>,
+    identity_keys: Vec<IdentityKeySetting>,
     name_input: form::Value<String>,
     pubkey_input: form::Value<String>,
     hws: HardwareWallets,
     warning: Option<Error>,
     /// Index of the contact currently being registered, if any.
     registering_contact: Option<usize>,
+    /// Whether we are currently fetching an identity key from a device.
+    fetching_identity_key: bool,
 }
 
 impl ContactsPanel {
     pub fn new(data_dir: LianaDirectory, wallet: Arc<Wallet>, network: Network) -> Self {
         let contacts = load_contacts(&data_dir, network, &wallet);
+        let identity_keys = load_identity_keys(&data_dir, network, &wallet);
         Self {
             hws: HardwareWallets::new(data_dir.clone(), network),
             data_dir,
             wallet,
             network,
             contacts,
+            identity_keys,
             name_input: form::Value::default(),
             pubkey_input: form::Value::default(),
             warning: None,
             registering_contact: None,
+            fetching_identity_key: false,
         }
     }
 }
@@ -67,6 +76,24 @@ fn load_contacts(
                 .into_iter()
                 .find(|w| w.wallet_id() == wallet_id)
                 .map(|w| w.contacts)
+        })
+        .unwrap_or_default()
+}
+
+fn load_identity_keys(
+    data_dir: &LianaDirectory,
+    network: Network,
+    wallet: &Wallet,
+) -> Vec<IdentityKeySetting> {
+    let network_dir = data_dir.network_directory(network);
+    let wallet_id = wallet.id();
+    LianaSettings::from_file(&network_dir)
+        .ok()
+        .and_then(|s| {
+            s.wallets
+                .into_iter()
+                .find(|w| w.wallet_id() == wallet_id)
+                .map(|w| w.identity_keys)
         })
         .unwrap_or_default()
 }
@@ -117,6 +144,35 @@ fn save_contacts(
     )
 }
 
+fn save_identity_keys(
+    data_dir: LianaDirectory,
+    network: Network,
+    wallet_id: crate::app::settings::WalletId,
+    identity_keys: Vec<IdentityKeySetting>,
+) -> Task<Message> {
+    Task::perform(
+        async move {
+            let network_dir = data_dir.network_directory(network);
+            update_settings_file(&network_dir, |mut s: LianaSettings| {
+                if let Some(ws) = s.wallets.iter_mut().find(|w| w.wallet_id() == wallet_id) {
+                    ws.identity_keys = identity_keys;
+                }
+                s
+            })
+            .await
+        },
+        |res| match res {
+            Ok(()) => Message::View(view::Message::Reload),
+            Err(e) => Message::View(view::Message::Contacts(
+                view::ContactsMessage::IdentityKeyFailed(format!(
+                    "Failed to save identity key: {}",
+                    e
+                )),
+            )),
+        },
+    )
+}
+
 impl State for ContactsPanel {
     fn view<'a>(&'a self, cache: &'a Cache) -> Element<'a, view::Message> {
         view::dashboard(
@@ -125,10 +181,12 @@ impl State for ContactsPanel {
             self.warning.as_ref(),
             view::contacts::contacts_view(
                 &self.contacts,
+                &self.identity_keys,
                 &self.name_input,
                 &self.pubkey_input,
                 &self.hws.list,
                 self.registering_contact,
+                self.fetching_identity_key,
             ),
         )
     }
@@ -256,6 +314,63 @@ impl State for ContactsPanel {
                         );
                     }
                 }
+                view::ContactsMessage::ShareIdentityKey(hw_idx) => {
+                    if self.fetching_identity_key {
+                        return Task::none();
+                    }
+                    let (device, fingerprint) = match self.hws.list.get(hw_idx) {
+                        Some(HardwareWallet::Supported {
+                            device,
+                            fingerprint,
+                            ..
+                        }) => (device.clone(), *fingerprint),
+                        _ => return Task::none(),
+                    };
+                    self.fetching_identity_key = true;
+                    self.warning = None;
+                    return Task::perform(
+                        async move {
+                            let xpub = device.get_identity_key(0).await?;
+                            let pubkey_hex = hex::encode(xpub.public_key.serialize());
+                            Ok((fingerprint, pubkey_hex))
+                        },
+                        move |res: Result<(Fingerprint, String), async_hwi::Error>| {
+                            Message::View(view::Message::Contacts(match res {
+                                Ok((fg, pubkey)) => {
+                                    view::ContactsMessage::IdentityKeyReceived(fg, pubkey)
+                                }
+                                Err(e) => view::ContactsMessage::IdentityKeyFailed(e.to_string()),
+                            }))
+                        },
+                    );
+                }
+                view::ContactsMessage::IdentityKeyReceived(fingerprint, pubkey) => {
+                    self.fetching_identity_key = false;
+                    // Replace existing entry for this device, or add new one.
+                    if let Some(existing) = self
+                        .identity_keys
+                        .iter_mut()
+                        .find(|k| k.device_fingerprint == fingerprint)
+                    {
+                        existing.pubkey = pubkey;
+                    } else {
+                        self.identity_keys.push(IdentityKeySetting {
+                            device_fingerprint: fingerprint,
+                            pubkey,
+                        });
+                    }
+                    self.warning = None;
+                    return save_identity_keys(
+                        self.data_dir.clone(),
+                        self.network,
+                        self.wallet.id(),
+                        self.identity_keys.clone(),
+                    );
+                }
+                view::ContactsMessage::IdentityKeyFailed(e) => {
+                    self.fetching_identity_key = false;
+                    self.warning = Some(Error::Unexpected(e));
+                }
             },
             Message::HardwareWallets(msg) => match self.hws.update(msg) {
                 Ok(cmd) => return cmd.map(Message::HardwareWallets),
@@ -281,9 +396,11 @@ impl State for ContactsPanel {
         let network = self.network;
         self.wallet = wallet.clone();
         self.contacts = load_contacts(&data_dir, network, &wallet);
+        self.identity_keys = load_identity_keys(&data_dir, network, &wallet);
         self.hws = HardwareWallets::new(data_dir, network);
         self.warning = None;
         self.registering_contact = None;
+        self.fetching_identity_key = false;
         Task::none()
     }
 }

@@ -50,6 +50,9 @@ pub enum ContactsMessage {
     Registered(usize, crate::app::settings::ContactRegistration),
     RegistrationFailed(String),
     Delete(usize),
+    ShareIdentityKey(usize),
+    IdentityKeyReceived(Fingerprint, String),
+    IdentityKeyFailed(String),
 }
 
 impl Close for Message {
