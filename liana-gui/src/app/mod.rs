@@ -29,7 +29,8 @@ pub use config::Config;
 pub use message::Message;
 
 use state::{
-    CoinsPanel, CreateSpendPanel, Home, PsbtsPanel, ReceivePanel, State, TransactionsPanel,
+    CoinsPanel, ContactsPanel, CreateSpendPanel, Home, PsbtsPanel, ReceivePanel, State,
+    TransactionsPanel,
 };
 use wallet::{sync_status, SyncStatus};
 
@@ -50,6 +51,7 @@ use crate::{
 struct Panels<S: SettingsTrait> {
     current: Menu,
     home: Home,
+    contacts: ContactsPanel,
     coins: CoinsPanel,
     transactions: TransactionsPanel,
     psbts: PsbtsPanel,
@@ -107,6 +109,7 @@ impl<S: SettingsTrait> Panels<S> {
             transactions: TransactionsPanel::new(wallet.clone()),
             psbts: PsbtsPanel::new(wallet.clone()),
             recovery: new_recovery_panel(wallet.clone(), cache),
+            contacts: ContactsPanel::new(data_dir.clone(), wallet.clone(), cache.network),
             receive: ReceivePanel::new(data_dir, wallet.clone()),
             create_spend: CreateSpendPanel::new(
                 wallet.clone(),
@@ -123,6 +126,7 @@ impl<S: SettingsTrait> Panels<S> {
     fn current(&self) -> &dyn State {
         match self.current {
             Menu::Home => &self.home,
+            Menu::Contacts => &self.contacts,
             Menu::Receive => &self.receive,
             Menu::PSBTs => &self.psbts,
             Menu::Transactions => &self.transactions,
@@ -139,6 +143,7 @@ impl<S: SettingsTrait> Panels<S> {
     fn current_mut(&mut self) -> &mut dyn State {
         match self.current {
             Menu::Home => &mut self.home,
+            Menu::Contacts => &mut self.contacts,
             Menu::Receive => &mut self.receive,
             Menu::PSBTs => &mut self.psbts,
             Menu::Transactions => &mut self.transactions,

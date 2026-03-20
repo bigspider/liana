@@ -2,6 +2,7 @@ use liana::miniscript::bitcoin::{OutPoint, Txid};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Menu {
     Home,
+    Contacts,
     Receive,
     PSBTs,
     Transactions,

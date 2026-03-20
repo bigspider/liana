@@ -285,6 +285,27 @@ pub struct LianaWalletSettings {
     // setting will be set to None during deserialization and the user will need to reconfigure it.
     #[serde(default, deserialize_with = "ok_or_none")]
     pub fiat_price: Option<fiat::PriceSetting>,
+    #[serde(default)]
+    pub contacts: Vec<ContactSetting>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ContactSetting {
+    pub name: String,
+    /// Hex-encoded identity pubkey.
+    pub pubkey: String,
+    #[serde(default)]
+    pub registrations: Vec<ContactRegistration>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ContactRegistration {
+    /// Fingerprint of the signing device used for registration.
+    pub device_fingerprint: Fingerprint,
+    /// Hex-encoded 32-byte registration ID.
+    pub registration_id: String,
+    /// Hex-encoded 32-byte proof of registration.
+    pub proof: String,
 }
 
 impl LianaWalletSettings {

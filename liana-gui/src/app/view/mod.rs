@@ -3,6 +3,7 @@ mod message;
 mod warning;
 
 pub mod coins;
+pub mod contacts;
 pub mod export;
 pub mod fiat;
 pub mod home;
@@ -27,8 +28,8 @@ use iced::{
 use liana_ui::{
     component::{button, text::*},
     icon::{
-        coins_icon, cross_icon, history_icon, home_icon, receive_icon, recovery_icon, send_icon,
-        settings_icon,
+        coins_icon, cross_icon, history_icon, home_icon, person_icon, receive_icon, recovery_icon,
+        send_icon, settings_icon,
     },
     image::*,
     theme,
@@ -55,6 +56,19 @@ pub fn sidebar<'a>(menu: &Menu, cache: &'a Cache) -> Container<'a, Message> {
         row!(button::menu(Some(home_icon()), "Home")
             .on_press(Message::Menu(Menu::Home))
             .width(iced::Length::Fill),)
+    };
+
+    let contacts_button = if *menu == Menu::Contacts {
+        row!(
+            button::menu_active(Some(person_icon()), "Contacts")
+                .on_press(Message::Reload)
+                .width(iced::Length::Fill),
+            menu_green_bar(),
+        )
+    } else {
+        row!(button::menu(Some(person_icon()), "Contacts")
+            .on_press(Message::Menu(Menu::Contacts))
+            .width(iced::Length::Fill))
     };
 
     let transactions_button = if *menu == Menu::Transactions {
@@ -163,6 +177,7 @@ pub fn sidebar<'a>(menu: &Menu, cache: &'a Cache) -> Container<'a, Message> {
                         .padding(10),
                     )
                     .push(home_button)
+                    .push(contacts_button)
                     .push(spend_button)
                     .push(receive_button)
                     .push(coins_button)
@@ -200,6 +215,19 @@ pub fn small_sidebar<'a>(menu: &Menu, cache: &'a Cache) -> Container<'a, Message
         row!(button::menu_small(home_icon())
             .on_press(Message::Menu(Menu::Home))
             .width(iced::Length::Fill),)
+    };
+
+    let contacts_button = if *menu == Menu::Contacts {
+        row!(
+            button::menu_active_small(person_icon())
+                .on_press(Message::Reload)
+                .width(iced::Length::Fill),
+            menu_green_bar(),
+        )
+    } else {
+        row!(button::menu_small(person_icon())
+            .on_press(Message::Menu(Menu::Contacts))
+            .width(iced::Length::Fill))
     };
 
     let transactions_button = if *menu == Menu::Transactions {
@@ -308,6 +336,7 @@ pub fn small_sidebar<'a>(menu: &Menu, cache: &'a Cache) -> Container<'a, Message
                         .padding(10),
                     )
                     .push(home_button)
+                    .push(contacts_button)
                     .push(spend_button)
                     .push(receive_button)
                     .push(coins_button)

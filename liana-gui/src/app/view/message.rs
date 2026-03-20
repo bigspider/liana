@@ -38,6 +38,18 @@ pub enum Message {
     ExportPsbt,
     ImportPsbt,
     OpenUrl(String),
+    Contacts(ContactsMessage),
+}
+
+#[derive(Debug, Clone)]
+pub enum ContactsMessage {
+    NameEdited(String),
+    PubkeyEdited(String),
+    AddContact,
+    RegisterContact(usize, usize),
+    Registered(usize, crate::app::settings::ContactRegistration),
+    RegistrationFailed(String),
+    Delete(usize),
 }
 
 impl Close for Message {

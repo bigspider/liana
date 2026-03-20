@@ -1,4 +1,5 @@
 mod coins;
+mod contacts;
 pub mod export;
 mod label;
 mod psbt;
@@ -37,6 +38,7 @@ use crate::daemon::{
 };
 use crate::utils::now;
 pub use coins::CoinsPanel;
+pub use contacts::ContactsPanel;
 use label::LabelsEdited;
 pub use psbts::PsbtsPanel;
 pub use receive::ReceivePanel;
