@@ -73,6 +73,11 @@ pub struct ReceivePanel {
     modal: Modal,
     warning: Option<Error>,
     processing: bool,
+    sign_with_identity: bool,
+    identity_hws: Option<HardwareWallets>,
+    selected_identity_hw: Option<usize>,
+    signed_addresses: HashMap<Address, String>,
+    signing_address: bool,
 }
 
 impl ReceivePanel {
@@ -89,6 +94,11 @@ impl ReceivePanel {
             modal: Modal::None,
             warning: None,
             processing: false,
+            sign_with_identity: false,
+            identity_hws: None,
+            selected_identity_hw: None,
+            signed_addresses: HashMap::new(),
+            signing_address: false,
         }
     }
 
@@ -129,6 +139,11 @@ impl State for ReceivePanel {
                 self.labels_edited.cache(),
                 self.prev_continue_from.is_none(),
                 self.processing,
+                self.sign_with_identity,
+                self.identity_hws.as_ref().map(|h| h.list.as_slice()),
+                self.selected_identity_hw,
+                &self.signed_addresses,
+                self.signing_address,
             ),
         );
 
@@ -144,10 +159,17 @@ impl State for ReceivePanel {
     }
 
     fn subscription(&self) -> Subscription<Message> {
+        let mut subs = Vec::new();
         if let Modal::VerifyAddress(modal) = &self.modal {
-            modal.subscription()
-        } else {
+            return modal.subscription();
+        }
+        if let Some(identity_hws) = &self.identity_hws {
+            subs.push(identity_hws.refresh().map(Message::HardwareWallets));
+        }
+        if subs.is_empty() {
             Subscription::none()
+        } else {
+            Subscription::batch(subs)
         }
     }
 
@@ -177,8 +199,32 @@ impl State for ReceivePanel {
                 match res {
                     Ok((address, derivation_index)) => {
                         self.warning = None;
-                        self.addresses.list.push(address);
+                        self.addresses.list.push(address.clone());
                         self.addresses.derivation_indexes.push(derivation_index);
+                        // If identity signing is enabled and a device is selected, get signed address
+                        if self.sign_with_identity {
+                            if let Some(hw_idx) = self.selected_identity_hw {
+                                if let Some(identity_hws) = &self.identity_hws {
+                                    if let Some(HardwareWallet::Supported {
+                                        device,
+                                        fingerprint,
+                                        ..
+                                    }) = identity_hws.list.get(hw_idx)
+                                    {
+                                        let fg = *fingerprint;
+                                        self.signing_address = true;
+                                        return Task::perform(
+                                            get_signed_address(
+                                                device.clone(),
+                                                derivation_index,
+                                                address,
+                                            ),
+                                            move |res| Message::SignedAddress(fg, res),
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(e) => self.warning = Some(e),
                 }
@@ -293,6 +339,52 @@ impl State for ReceivePanel {
                     }
                 }
                 Task::none()
+            }
+            Message::View(view::Message::ToggleSignAddressIdentity(value)) => {
+                self.sign_with_identity = value;
+                if value {
+                    self.identity_hws = Some(
+                        HardwareWallets::new(self.data_dir.clone(), cache.network)
+                            .with_wallet(self.wallet.clone()),
+                    );
+                } else {
+                    self.identity_hws = None;
+                    self.selected_identity_hw = None;
+                }
+                Task::none()
+            }
+            Message::View(view::Message::SelectIdentityHardwareWallet(i)) => {
+                self.selected_identity_hw = Some(i);
+                Task::none()
+            }
+            Message::SignedAddress(_fg, res) => {
+                self.signing_address = false;
+                match res {
+                    Ok((address, signed)) => {
+                        self.warning = None;
+                        self.signed_addresses.insert(address, signed);
+                    }
+                    Err(e) => {
+                        self.warning = Some(e);
+                    }
+                }
+                Task::none()
+            }
+            Message::HardwareWallets(msg) => {
+                if let Modal::VerifyAddress(ref mut m) = self.modal {
+                    return m.update(daemon, cache, Message::HardwareWallets(msg));
+                }
+                if let Some(identity_hws) = &mut self.identity_hws {
+                    match identity_hws.update(msg) {
+                        Ok(cmd) => cmd.map(Message::HardwareWallets),
+                        Err(e) => {
+                            self.warning = Some(e.into());
+                            Task::none()
+                        }
+                    }
+                } else {
+                    Task::none()
+                }
             }
             _ => {
                 if let Modal::VerifyAddress(ref mut m) = self.modal {
@@ -444,6 +536,31 @@ async fn verify_address(
     })
     .await?;
     Ok(())
+}
+
+async fn get_signed_address(
+    hw: std::sync::Arc<dyn async_hwi::HWI + Send + Sync>,
+    index: ChildNumber,
+    address: Address,
+) -> Result<(Address, String), Error> {
+    let (addr_str, identity_sig) = hw
+        .get_signed_address(
+            &async_hwi::AddressScript::Miniscript {
+                change: false,
+                index: index.into(),
+            },
+            0,
+        )
+        .await?;
+    Ok((
+        address,
+        format!(
+            "{}?id_pubkey={}&id_sig={}",
+            addr_str,
+            hex::encode(&identity_sig.identity_pubkey),
+            hex::encode(&identity_sig.signature),
+        ),
+    ))
 }
 
 #[cfg(test)]

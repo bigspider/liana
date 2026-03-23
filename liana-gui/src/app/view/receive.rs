@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use iced::{
     alignment::Horizontal,
     widget::{
+        checkbox,
         qr_code::{self, QRCode},
         scrollable, Button, Space,
     },
@@ -29,8 +30,10 @@ use crate::{
         error::Error,
         view::{hw, label, warning::warn},
     },
-    hw::HardwareWallet,
+    hw::{HardwareWallet, UnsupportedReason},
 };
+
+use liana_ui::component::hw as hw_component;
 
 use super::message::Message;
 
@@ -39,8 +42,10 @@ fn address_card<'a>(
     address: &'a bitcoin::Address,
     labels: &'a HashMap<String, String>,
     labels_editing: &'a HashMap<String, form::Value<String>>,
+    signed_address: Option<&'a str>,
 ) -> Container<'a, Message> {
     let addr = address.to_string();
+    let display_addr = signed_address.unwrap_or(&addr);
     card::simple(
         Column::new()
             .push(if let Some(label) = labels_editing.get(&addr) {
@@ -55,7 +60,11 @@ fn address_card<'a>(
                             scrollable(
                                 Column::new()
                                     .push(Space::with_height(Length::Fixed(10.0)))
-                                    .push(p2_regular(address).small().style(theme::text::secondary))
+                                    .push(
+                                        p2_regular(display_addr)
+                                            .small()
+                                            .style(theme::text::secondary),
+                                    )
                                     // Space between the address and the scrollbar
                                     .push(Space::with_height(Length::Fixed(10.0))),
                             )
@@ -69,7 +78,7 @@ fn address_card<'a>(
                     )
                     .push(
                         Button::new(icon::clipboard_icon().style(theme::text::secondary))
-                            .on_press(Message::Clipboard(addr))
+                            .on_press(Message::Clipboard(display_addr.to_string()))
                             .style(theme::button::transparent_border),
                     )
                     .align_y(Alignment::Center),
@@ -101,6 +110,11 @@ pub fn receive<'a>(
     labels_editing: &'a HashMap<String, form::Value<String>>,
     is_last_page: bool,
     processing: bool,
+    sign_with_identity: bool,
+    identity_hws: Option<&'a [HardwareWallet]>,
+    selected_identity_hw: Option<usize>,
+    signed_addresses: &'a HashMap<bitcoin::Address, String>,
+    signing_address: bool,
 ) -> Element<'a, Message> {
     // Number of start and end address characters to show in collapsed view.
     const NUM_ADDR_CHARS: usize = 16;
@@ -122,6 +136,82 @@ pub fn receive<'a>(
         )
         .push(text("Always generate a new address for each deposit."))
         .push(
+            Container::new(
+                checkbox("Sign address with your identity key", sign_with_identity)
+                    .on_toggle(Message::ToggleSignAddressIdentity),
+            )
+            .padding(5),
+        )
+        .push_maybe(identity_hws.map(|hws| {
+            Column::new()
+                .spacing(10)
+                .push(text("Select device to sign with:").width(Length::Fill))
+                .push(
+                    hws.iter()
+                        .enumerate()
+                        .fold(Column::new().spacing(5), |col, (i, hw_item)| {
+                            let is_selected = selected_identity_hw == Some(i);
+                            let mut bttn = Button::new(match hw_item {
+                                HardwareWallet::Supported {
+                                    kind,
+                                    version,
+                                    fingerprint,
+                                    alias,
+                                    ..
+                                } => hw_component::supported_hardware_wallet(
+                                    kind,
+                                    version.as_ref(),
+                                    fingerprint,
+                                    alias.as_ref(),
+                                ),
+                                HardwareWallet::Unsupported {
+                                    version,
+                                    kind,
+                                    reason,
+                                    ..
+                                } => match reason {
+                                    UnsupportedReason::NotPartOfWallet(fg) => {
+                                        hw_component::unrelated_hardware_wallet(
+                                            kind.to_string(),
+                                            version.as_ref(),
+                                            fg,
+                                        )
+                                    }
+                                    UnsupportedReason::WrongNetwork => {
+                                        hw_component::wrong_network_hardware_wallet(
+                                            kind.to_string(),
+                                            version.as_ref(),
+                                        )
+                                    }
+                                    _ => hw_component::unsupported_hardware_wallet(
+                                        kind.to_string(),
+                                        version.as_ref(),
+                                    ),
+                                },
+                                HardwareWallet::Locked {
+                                    kind, pairing_code, ..
+                                } => hw_component::locked_hardware_wallet(
+                                    kind,
+                                    pairing_code.as_ref(),
+                                ),
+                            })
+                            .style(if is_selected {
+                                theme::button::primary
+                            } else {
+                                theme::button::secondary
+                            })
+                            .width(Length::Fill);
+                            if hw_item.is_supported() {
+                                bttn = bttn.on_press(Message::SelectIdentityHardwareWallet(i));
+                            }
+                            col.push(bttn)
+                        }),
+                )
+        }))
+        .push_maybe(
+            signing_address.then_some(text("Signing address...").style(theme::text::secondary)),
+        )
+        .push(
             Row::new()
                 .spacing(10)
                 .push(addresses.iter().enumerate().rev().fold(
@@ -129,7 +219,8 @@ pub fn receive<'a>(
                     Column::new().spacing(10).width(Length::Fill),
                     |col, (i, address)| {
                         addresses_count += 1;
-                        col.push(address_card(i, address, labels, labels_editing))
+                        let signed = signed_addresses.get(address).map(|s| s.as_str());
+                        col.push(address_card(i, address, labels, labels_editing, signed))
                     },
                 )),
         )
@@ -231,6 +322,7 @@ pub fn receive<'a>(
                             address,
                             prev_labels,
                             labels_editing,
+                            None,
                         ))
                         .padding(0) // so that button & card borders match
                         .on_press(Message::SelectAddress(address.clone()))

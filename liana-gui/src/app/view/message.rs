@@ -31,6 +31,8 @@ pub enum Message {
     Next,
     Previous,
     SelectHardwareWallet(usize),
+    ToggleSignAddressIdentity(bool),
+    SelectIdentityHardwareWallet(usize),
     CreateRbf(CreateRbfMessage),
     ShowQrCode(usize),
     ImportExport(ImportExportMessage),

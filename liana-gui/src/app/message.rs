@@ -56,6 +56,7 @@ pub enum Message {
     Updated(Result<(), Error>),
     Saved(Result<(), Error>),
     Verified(Fingerprint, Result<(), Error>),
+    SignedAddress(Fingerprint, Result<(Address, String), Error>),
     StartRescan(Result<(), Error>),
     HardwareWallets(HardwareWalletMessage),
     HistoryTransactionsExtension(Result<Vec<HistoryTransaction>, Error>),
