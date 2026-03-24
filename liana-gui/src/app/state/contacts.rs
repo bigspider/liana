@@ -62,7 +62,7 @@ impl ContactsPanel {
     }
 }
 
-fn load_contacts(
+pub(crate) fn load_contacts(
     data_dir: &LianaDirectory,
     network: Network,
     wallet: &Wallet,

@@ -21,12 +21,17 @@ use lianad::commands::ListCoinsEntry;
 
 use liana_ui::{component::form, widget::Element};
 
+use vnd_bitcoin_common::psbt::id_auth::{
+    OutputAuthProof, PsbtIdAuthGlobalWrite, PsbtOutputAuthWrite, RegisteredIdentityKey,
+};
+
 use crate::{
     app::{
         cache::Cache,
         error::Error,
         message::Message,
-        state::{fiat_converter_for_wallet, psbt},
+        settings::ContactSetting,
+        state::{contacts::load_contacts, fiat_converter_for_wallet, psbt},
         view::{self, fiat::FiatAmount},
         wallet::Wallet,
     },
@@ -322,7 +327,7 @@ impl DefineSpend {
                     None
                 } else {
                     Some((
-                        Address::from_str(&recipient.address.value).expect("Checked before"),
+                        Address::from_str(recipient.base_address_str()).expect("Checked before"),
                         recipient.amount().expect("Checked before"),
                     ))
                 }
@@ -400,7 +405,7 @@ impl DefineSpend {
         // Otherwise, for a primary path spend, use a fixed change address from the user's
         // own wallet so that we don't increment the change index.
         let max_address = if let Some((_, recipient)) = &recipient_with_max {
-            Address::from_str(&recipient.address.value)
+            Address::from_str(recipient.base_address_str())
                 .expect("Checked before")
                 .as_unchecked()
                 .clone()
@@ -687,12 +692,10 @@ impl Step for DefineSpend {
                         self.warning = None;
                         if let Some(reco_tl) = self.recovery_timelock {
                             let recovery_address = Address::from_str(
-                                &self
-                                    .recipients
+                                self.recipients
                                     .first()
                                     .expect("recovery spend has a recipient")
-                                    .address
-                                    .value,
+                                    .base_address_str(),
                             )
                             .expect("Checked before");
                             return Task::perform(
@@ -711,8 +714,47 @@ impl Step for DefineSpend {
                                 Message::Psbt,
                             );
                         } else {
+                            // Collect identity auth entries and resolve registrations
+                            // before going async.
+                            let mut id_auth_entries: Vec<(
+                                String,
+                                [u8; 33],
+                                [u8; 64],
+                                RegisteredIdentityKey,
+                            )> = Vec::new();
+                            let has_id_auth = self.recipients.iter().any(|r| r.id_auth.is_some());
+                            if has_id_auth {
+                                let contacts =
+                                    load_contacts(&cache.datadir_path, cache.network, &self.wallet);
+                                for recipient in &self.recipients {
+                                    if let Some(auth) = &recipient.id_auth {
+                                        match find_registered_identity_key(&contacts, &auth.pubkey)
+                                        {
+                                            Some(reg_key) => {
+                                                id_auth_entries.push((
+                                                    recipient.base_address_str().to_string(),
+                                                    auth.pubkey,
+                                                    auth.sig,
+                                                    reg_key,
+                                                ));
+                                            }
+                                            None => {
+                                                self.warning = Some(Error::Unexpected(
+                                                    format!(
+                                                        "Identity key {} is not registered. \
+                                                         Register the contact on a signing device first.",
+                                                        hex::encode(auth.pubkey)
+                                                    ),
+                                                ));
+                                                return Task::none();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             for recipient in &self.recipients {
-                                let address = Address::from_str(&recipient.address.value)
+                                let address = Address::from_str(recipient.base_address_str())
                                     .expect("Checked before");
                                 outputs
                                     .insert(address, recipient.amount().expect("Checked before"));
@@ -724,7 +766,52 @@ impl Step for DefineSpend {
                                         .await
                                         .map_err(|e| e.into())
                                         .and_then(|res| match res {
-                                            CreateSpendResult::Success { psbt, warnings } => {
+                                            CreateSpendResult::Success {
+                                                mut psbt,
+                                                warnings,
+                                            } => {
+                                                // Add identity auth data to PSBT.
+                                                for (
+                                                    base_addr,
+                                                    pubkey,
+                                                    sig,
+                                                    reg_key,
+                                                ) in &id_auth_entries
+                                                {
+                                                    psbt.add_registered_identity_key(reg_key)
+                                                        .map_err(|e| {
+                                                            Error::Unexpected(format!(
+                                                                "Failed to add identity key to PSBT: {:?}",
+                                                                e
+                                                            ))
+                                                        })?;
+                                                    let spk = Address::from_str(base_addr)
+                                                        .expect("Already validated")
+                                                        .assume_checked()
+                                                        .script_pubkey();
+                                                    for (i, output) in psbt
+                                                        .unsigned_tx
+                                                        .output
+                                                        .iter()
+                                                        .enumerate()
+                                                    {
+                                                        if output.script_pubkey == spk {
+                                                            psbt.outputs[i]
+                                                                .add_auth_proof(
+                                                                    &OutputAuthProof::IdentitySignature {
+                                                                        pubkey: *pubkey,
+                                                                        sig: *sig,
+                                                                    },
+                                                                )
+                                                                .map_err(|e| {
+                                                                    Error::Unexpected(format!(
+                                                                        "Failed to add auth proof to PSBT: {:?}",
+                                                                        e
+                                                                    ))
+                                                                })?;
+                                                        }
+                                                    }
+                                                }
                                                 Ok((psbt, warnings))
                                             }
                                             CreateSpendResult::InsufficientFunds { missing } => {
@@ -828,7 +915,7 @@ impl Step for DefineSpend {
                     .iter()
                     .find(|recipient| {
                         !recipient.label.value.is_empty()
-                            && Address::from_str(&recipient.address.value)
+                            && Address::from_str(recipient.base_address_str())
                                 .unwrap()
                                 .assume_checked()
                                 .matches_script_pubkey(&output.script_pubkey)
@@ -893,6 +980,64 @@ impl Step for DefineSpend {
     }
 }
 
+#[derive(Debug, Clone)]
+struct IdAuth {
+    pubkey: [u8; 33],
+    sig: [u8; 64],
+}
+
+/// Parse identity authentication parameters from an address string of the form
+/// `address?id_pubkey=<66 hex chars>&id_sig=<128 hex chars>`.
+fn parse_id_auth(full_address: &str) -> Option<IdAuth> {
+    let (_, query) = full_address.split_once('?')?;
+    let mut id_pubkey = None;
+    let mut id_sig = None;
+    for param in query.split('&') {
+        if let Some((key, value)) = param.split_once('=') {
+            match key {
+                "id_pubkey" => id_pubkey = Some(value),
+                "id_sig" => id_sig = Some(value),
+                _ => {}
+            }
+        }
+    }
+    let pk_hex = id_pubkey?;
+    let sig_hex = id_sig?;
+    if pk_hex.len() != 66 || sig_hex.len() != 128 {
+        return None;
+    }
+    let pk_bytes = hex::decode(pk_hex).ok()?;
+    let sig_bytes = hex::decode(sig_hex).ok()?;
+    let mut pubkey = [0u8; 33];
+    let mut sig = [0u8; 64];
+    pubkey.copy_from_slice(&pk_bytes);
+    sig.copy_from_slice(&sig_bytes);
+    Some(IdAuth { pubkey, sig })
+}
+
+/// Look up the contact matching the given identity pubkey and return a
+/// [`RegisteredIdentityKey`] built from the first available device registration.
+/// Returns `None` if the contact is not found or has no registrations.
+fn find_registered_identity_key(
+    contacts: &[ContactSetting],
+    pubkey: &[u8; 33],
+) -> Option<RegisteredIdentityKey> {
+    let pubkey_hex = hex::encode(pubkey);
+    let contact = contacts.iter().find(|c| c.pubkey == pubkey_hex)?;
+    let reg = contact.registrations.first()?;
+    let proof_bytes = hex::decode(&reg.proof).ok()?;
+    if proof_bytes.len() != 32 {
+        return None;
+    }
+    let mut por = [0u8; 32];
+    por.copy_from_slice(&proof_bytes);
+    Some(RegisteredIdentityKey {
+        pubkey: *pubkey,
+        name: contact.name.clone(),
+        por,
+    })
+}
+
 #[derive(Debug, Default, Clone)]
 struct Recipient {
     label: form::Value<String>,
@@ -904,6 +1049,8 @@ struct Recipient {
     fiat_converter: Option<view::FiatAmountConverter>, // the converter at the time of entering the fiat amount
     is_recovery: bool,
     dust_warning: Option<String>,
+    /// Identity authentication data parsed from the address.
+    id_auth: Option<IdAuth>,
 }
 
 impl Recipient {
@@ -912,6 +1059,14 @@ impl Recipient {
             is_recovery,
             ..Default::default()
         }
+    }
+
+    /// Returns the base address string (without any query parameters).
+    fn base_address_str(&self) -> &str {
+        self.address
+            .value
+            .split_once('?')
+            .map_or(self.address.value.as_str(), |(base, _)| base)
     }
 
     fn amount(&self) -> Result<u64, Error> {
@@ -930,7 +1085,7 @@ impl Recipient {
             return Err(Error::Unexpected("Amount should be non-zero".to_string()));
         }
 
-        if let Ok(address) = Address::from_str(&self.address.value) {
+        if let Ok(address) = Address::from_str(self.base_address_str()) {
             if amount <= address.assume_checked().script_pubkey().minimal_non_dust() {
                 return Err(Error::Unexpected(
                     "Amount must be superior to script dust value".to_string(),
@@ -956,8 +1111,11 @@ impl Recipient {
         match message {
             view::CreateSpendMessage::RecipientEdited(_, "address", address) => {
                 self.address.value = address;
-                if let Ok(address) = Address::from_str(&self.address.value) {
-                    self.address.valid = address.is_valid_for_network(network);
+                self.id_auth = parse_id_auth(&self.address.value);
+                if let Ok(address) = Address::from_str(self.base_address_str()) {
+                    self.address.valid = address.is_valid_for_network(network)
+                        // If query params are present, they must be valid id_auth.
+                        && (!self.address.value.contains('?') || self.id_auth.is_some());
                     if !self.amount.value.is_empty() {
                         self.amount.valid = self.amount().is_ok();
                     }

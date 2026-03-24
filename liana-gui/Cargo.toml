@@ -64,6 +64,9 @@ open = { workspace = true }
 
 encrypted_backup = { workspace = true }
 
+# vanadium
+vnd-bitcoin-common = { git = "https://github.com/LedgerHQ/vanadium.git" }
+
 [target.'cfg(windows)'.dependencies]
 zip = { workspace = true, default-features = false, features = ["bzip2", "deflate"] }
 
