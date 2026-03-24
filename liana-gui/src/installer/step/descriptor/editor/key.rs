@@ -1562,7 +1562,7 @@ pub async fn get_extended_pubkey(
 }
 
 /// Like `get_extended_pubkey`, but also requests an identity signature from the device.
-/// Returns the xpub string with `?identity_pk=<hex>&identity_sig=<hex>` appended.
+/// Returns the xpub string with `?id_pk=<hex>&id_sig=<hex>` appended.
 pub async fn get_signed_extended_pubkey(
     hw: std::sync::Arc<dyn async_hwi::HWI + Send + Sync>,
     fingerprint: Fingerprint,
@@ -1581,7 +1581,7 @@ pub async fn get_signed_extended_pubkey(
         xkey,
     });
     Ok(format!(
-        "{}?identity_pk={}&identity_sig={}",
+        "{}?id_pk={}&id_sig={}",
         dpk,
         hex::encode(&identity_sig.identity_pubkey),
         hex::encode(&identity_sig.signature),
