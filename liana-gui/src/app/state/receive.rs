@@ -218,6 +218,7 @@ impl State for ReceivePanel {
                                                 device.clone(),
                                                 derivation_index,
                                                 address,
+                                                cache.network,
                                             ),
                                             move |res| Message::SignedAddress(fg, res),
                                         );
@@ -542,6 +543,7 @@ async fn get_signed_address(
     hw: std::sync::Arc<dyn async_hwi::HWI + Send + Sync>,
     index: ChildNumber,
     address: Address,
+    network: Network,
 ) -> Result<(Address, String), Error> {
     let (addr_str, identity_sig) = hw
         .get_signed_address(
@@ -552,6 +554,13 @@ async fn get_signed_address(
             0,
         )
         .await?;
+    // Hack: the Vanadium app return a testnet address for regtest. Use the address
+    // we already know (from the daemon) so the correct network prefix is shown.
+    let addr_str = if network == Network::Regtest {
+        address.to_string()
+    } else {
+        addr_str
+    };
     Ok((
         address,
         format!(

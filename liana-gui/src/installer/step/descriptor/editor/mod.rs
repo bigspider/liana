@@ -469,6 +469,7 @@ impl Step for DefineDescriptor {
 
         ctx.bitcoin_config.network = self.network;
         ctx.keys = HashMap::new();
+        ctx.key_identity_sigs = HashMap::new();
         let mut hw_is_used = false;
         let mut spending_keys: Vec<DescriptorPublicKey> = Vec::new();
         let mut key_derivation_index = HashMap::<Fingerprint, usize>::new();
@@ -493,6 +494,10 @@ impl Step for DefineDescriptor {
                     );
                     if key.source.device_kind().is_some() {
                         hw_is_used = true;
+                    }
+                    if let Some(id_sig) = &key.identity_sig {
+                        ctx.key_identity_sigs
+                            .insert(master_fingerprint, id_sig.clone());
                     }
                 }
                 let derivation_index = key_derivation_index.get(&fingerprint).unwrap_or(&0);
@@ -529,6 +534,10 @@ impl Step for DefineDescriptor {
                         );
                         if key.source.device_kind().is_some() {
                             hw_is_used = true;
+                        }
+                        if let Some(id_sig) = &key.identity_sig {
+                            ctx.key_identity_sigs
+                                .insert(master_fingerprint, id_sig.clone());
                         }
                     }
 
@@ -904,6 +913,7 @@ mod tests {
             key,
             source: KeySource::Device(async_hwi::DeviceKind::Specter, None),
             account: None,
+            identity_sig: None,
         };
 
         // Use Specter device for primary key

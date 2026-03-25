@@ -374,6 +374,7 @@ impl SelectKeySource {
                                 name: "".to_string(),
                                 key,
                                 account: Some(account),
+                                identity_sig: None,
                             })
                         } else {
                             Err(Error::Unexpected(
@@ -464,6 +465,7 @@ impl SelectKeySource {
                         name: format!("{} - {}", key.provider.name.clone(), key.kind),
                         key: key.xpub.clone(),
                         account: None,
+                        identity_sig: None,
                     }),
                 }))
             },
@@ -527,6 +529,7 @@ impl SelectKeySource {
             fingerprint,
             key,
             account: Some(account),
+            identity_sig: None,
         };
         self.selected_key = SelectedKey::New(Box::new(key));
         Task::none()
@@ -628,7 +631,10 @@ impl SelectKeySource {
         self.form_xpub.warning = None;
         self.selected_key = SelectedKey::None;
         self.form_xpub.value = xpub.clone();
-        if let Ok(DescriptorPublicKey::XPub(key)) = DescriptorPublicKey::from_str(&xpub) {
+        // Strip identity suffix (?id_pubkey=...&id_sig=...) before parsing
+        let (bare_xpub, id_suffix) = crate::export::split_xpub_id_suffix(&xpub);
+        let identity_sig = parse_id_suffix(id_suffix.as_deref());
+        if let Ok(DescriptorPublicKey::XPub(key)) = DescriptorPublicKey::from_str(bare_xpub) {
             if !key.derivation_path.is_master() {
                 self.form_xpub.valid = false;
                 self.form_xpub.warning = Some("Wrong derivation path");
@@ -648,7 +654,7 @@ impl SelectKeySource {
                 }
 
                 if self.form_xpub.valid {
-                    self.xpub_valid(fingerprint, key);
+                    self.xpub_valid(fingerprint, key, identity_sig);
                 }
             } else {
                 self.form_xpub.valid = false;
@@ -663,25 +669,34 @@ impl SelectKeySource {
         Task::none()
     }
     fn on_import_xpub(&mut self, xpub: String) -> Task<Message> {
-        if let Ok(DescriptorPublicKey::XPub(key)) = DescriptorPublicKey::from_str(&xpub) {
+        // Strip identity suffix (?id_pubkey=...&id_sig=...) before parsing
+        let (bare_xpub, id_suffix) = crate::export::split_xpub_id_suffix(&xpub);
+        let identity_sig = parse_id_suffix(id_suffix.as_deref());
+        if let Ok(DescriptorPublicKey::XPub(key)) = DescriptorPublicKey::from_str(bare_xpub) {
             if let Some((fingerprint, _)) = key.origin {
                 if self.keys.contains_key(&fingerprint) {
                     self.import_xpub_error = Some("Imported key already used".to_string());
                     self.focus = Focus::None;
                 } else {
-                    self.xpub_valid(fingerprint, key)
+                    self.xpub_valid(fingerprint, key, identity_sig)
                 }
             }
         }
         Task::none()
     }
-    fn xpub_valid(&mut self, fingerprint: Fingerprint, key: DescriptorXKey<Xpub>) {
+    fn xpub_valid(
+        &mut self,
+        fingerprint: Fingerprint,
+        key: DescriptorXKey<Xpub>,
+        identity_sig: Option<(String, String)>,
+    ) {
         let key = Key {
             source: KeySource::Manual,
             fingerprint,
             name: "".to_string(),
             key: DescriptorPublicKey::XPub(key),
             account: None,
+            identity_sig,
         };
         if self.keys.contains_key(&fingerprint) {
             self.selected_key = SelectedKey::Existing(fingerprint);
@@ -1540,6 +1555,25 @@ pub fn derivation_path(network: Network, account: ChildNumber) -> DerivationPath
     .into()
 }
 
+/// Parse an identity suffix string (e.g. `"?id_pubkey=<66hex>&id_sig=<128hex>"`)
+/// into a `(id_pubkey_hex, id_sig_hex)` tuple.
+fn parse_id_suffix(suffix: Option<&str>) -> Option<(String, String)> {
+    let suffix = suffix?;
+    let query = suffix.strip_prefix('?')?;
+    let mut id_pubkey = None;
+    let mut id_sig = None;
+    for param in query.split('&') {
+        if let Some((key, value)) = param.split_once('=') {
+            match key {
+                "id_pubkey" => id_pubkey = Some(value.to_string()),
+                "id_sig" => id_sig = Some(value.to_string()),
+                _ => {}
+            }
+        }
+    }
+    Some((id_pubkey?, id_sig?))
+}
+
 /// LIANA_STANDARD_PATH: m/48'/0'/0'/2';
 /// LIANA_TESTNET_STANDARD_PATH: m/48'/1'/0'/2';
 pub async fn get_extended_pubkey(
@@ -1562,7 +1596,7 @@ pub async fn get_extended_pubkey(
 }
 
 /// Like `get_extended_pubkey`, but also requests an identity signature from the device.
-/// Returns the xpub string with `?id_pk=<hex>&id_sig=<hex>` appended.
+/// Returns the xpub string with `?id_pubkey=<hex>&id_sig=<hex>` appended.
 pub async fn get_signed_extended_pubkey(
     hw: std::sync::Arc<dyn async_hwi::HWI + Send + Sync>,
     fingerprint: Fingerprint,
@@ -1581,7 +1615,7 @@ pub async fn get_signed_extended_pubkey(
         xkey,
     });
     Ok(format!(
-        "{}?id_pk={}&id_sig={}",
+        "{}?id_pubkey={}&id_sig={}",
         dpk,
         hex::encode(&identity_sig.identity_pubkey),
         hex::encode(&identity_sig.signature),

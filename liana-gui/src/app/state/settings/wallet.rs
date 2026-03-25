@@ -316,12 +316,14 @@ impl From<WalletSettingsState> for Box<dyn State> {
 
 pub struct RegisterWalletModal {
     data_dir: LianaDirectory,
+    network: Network,
     wallet: Arc<Wallet>,
     warning: Option<Error>,
     chosen_hw: Option<usize>,
     hws: HardwareWallets,
     registered: HashSet<Fingerprint>,
     processing: bool,
+    contacts: Vec<settings::ContactSetting>,
 }
 
 impl RegisterWalletModal {
@@ -330,14 +332,23 @@ impl RegisterWalletModal {
         for hw in &wallet.hardware_wallets {
             registered.insert(hw.fingerprint);
         }
+        let network_dir = data_dir.network_directory(network);
+        let contacts =
+            settings::WalletSettings::from_file(&network_dir, |w| w.wallet_id() == wallet.id())
+                .ok()
+                .flatten()
+                .map(|s| s.contacts)
+                .unwrap_or_default();
         Self {
             data_dir: data_dir.clone(),
+            network,
             warning: None,
             chosen_hw: None,
             hws: HardwareWallets::new(data_dir, network).with_wallet(wallet.clone()),
             wallet,
             processing: false,
             registered,
+            contacts,
         }
     }
 }
@@ -407,11 +418,12 @@ impl RegisterWalletModal {
                     Task::perform(
                         register_wallet(
                             self.data_dir.clone(),
-                            cache.network,
+                            self.network,
                             device.clone(),
                             *fingerprint,
                             self.wallet.clone(),
                             daemon,
+                            self.contacts.clone(),
                         ),
                         Message::WalletUpdated,
                     )
@@ -431,9 +443,12 @@ pub async fn register_wallet(
     fingerprint: Fingerprint,
     wallet: Arc<Wallet>,
     daemon: Arc<dyn Daemon + Sync + Send>,
+    contacts: Vec<settings::ContactSetting>,
 ) -> Result<Arc<Wallet>, Error> {
+    let descriptor_str = wallet.main_descriptor.to_string();
+
     let hmac = hw
-        .register_wallet(&wallet.name, &wallet.main_descriptor.to_string())
+        .register_wallet(&wallet.name, &descriptor_str)
         .await
         .map_err(Error::from)?;
 

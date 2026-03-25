@@ -111,6 +111,8 @@ pub struct Key {
     pub fingerprint: Fingerprint,
     pub key: DescriptorPublicKey,
     pub account: Option<ChildNumber>,
+    /// Identity signature from a signed xpub: (id_pubkey_hex, id_sig_hex).
+    pub identity_sig: Option<(String, String)>,
 }
 
 pub struct Path {

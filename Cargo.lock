@@ -328,7 +328,7 @@ dependencies = [
 [[package]]
 name = "async-hwi"
 version = "0.0.30"
-source = "git+https://github.com/bigspider/async-hwi.git?branch=vanadium#9815164de954eb4c1fc15ce7f2b099781fa25aca"
+source = "git+https://github.com/bigspider/async-hwi.git?branch=vanadium#f0598ebebab134725259f39d082a40ecfefe6616"
 dependencies = [
  "async-trait",
  "bitbox-api",
@@ -1261,7 +1261,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/LedgerHQ/vanadium.git#d43211305b66580e0104adf334a35dde7d85cdc8"
+source = "git+https://github.com/LedgerHQ/vanadium.git#59f7ef3e45f8dd58b5bc857532c900051247bd4b"
 dependencies = [
  "serde",
  "serde_json",
@@ -6816,7 +6816,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 [[package]]
 name = "vanadium-app-sdk"
 version = "0.1.0"
-source = "git+https://github.com/LedgerHQ/vanadium.git#d43211305b66580e0104adf334a35dde7d85cdc8"
+source = "git+https://github.com/LedgerHQ/vanadium.git#59f7ef3e45f8dd58b5bc857532c900051247bd4b"
 dependencies = [
  "bip32",
  "common",
@@ -6840,7 +6840,7 @@ dependencies = [
 [[package]]
 name = "vanadium-client-sdk"
 version = "0.1.0"
-source = "git+https://github.com/LedgerHQ/vanadium.git#d43211305b66580e0104adf334a35dde7d85cdc8"
+source = "git+https://github.com/LedgerHQ/vanadium.git#59f7ef3e45f8dd58b5bc857532c900051247bd4b"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -6859,7 +6859,7 @@ dependencies = [
 [[package]]
 name = "vanadium_macros"
 version = "0.1.0"
-source = "git+https://github.com/LedgerHQ/vanadium.git#d43211305b66580e0104adf334a35dde7d85cdc8"
+source = "git+https://github.com/LedgerHQ/vanadium.git#59f7ef3e45f8dd58b5bc857532c900051247bd4b"
 dependencies = [
  "proc-macro-error2",
  "proc-macro2",
@@ -6882,7 +6882,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vnd-bitcoin-client"
 version = "0.1.0"
-source = "git+https://github.com/LedgerHQ/vanadium.git#d43211305b66580e0104adf334a35dde7d85cdc8"
+source = "git+https://github.com/LedgerHQ/vanadium.git#59f7ef3e45f8dd58b5bc857532c900051247bd4b"
 dependencies = [
  "base58ck",
  "base64 0.22.1",
@@ -6904,7 +6904,7 @@ dependencies = [
 [[package]]
 name = "vnd-bitcoin-common"
 version = "0.1.0"
-source = "git+https://github.com/LedgerHQ/vanadium.git#d43211305b66580e0104adf334a35dde7d85cdc8"
+source = "git+https://github.com/LedgerHQ/vanadium.git#59f7ef3e45f8dd58b5bc857532c900051247bd4b"
 dependencies = [
  "base58ck",
  "base64 0.22.1",
@@ -6921,7 +6921,7 @@ dependencies = [
 [[package]]
 name = "vnd-bitcoin-macros"
 version = "0.1.0"
-source = "git+https://github.com/LedgerHQ/vanadium.git#d43211305b66580e0104adf334a35dde7d85cdc8"
+source = "git+https://github.com/LedgerHQ/vanadium.git#59f7ef3e45f8dd58b5bc857532c900051247bd4b"
 dependencies = [
  "proc-macro2",
  "quote",

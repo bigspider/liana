@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::{
-    app::settings::KeySetting,
+    app::settings::{ContactSetting, KeySetting},
     backup::Backup,
     dir::LianaDirectory,
     node::bitcoind::{Bitcoind, InternalBitcoindConfig},
@@ -72,6 +72,10 @@ pub struct Context {
     pub remote_backend: RemoteBackend,
     pub backup: Option<Backup>,
     pub wallet_alias: String,
+    /// Identity signatures associated with descriptor keys: fingerprint → (id_pubkey_hex, id_sig_hex).
+    pub key_identity_sigs: HashMap<bitcoin::bip32::Fingerprint, (String, String)>,
+    /// Contacts loaded from existing wallet settings, used during registration.
+    pub contacts: Vec<ContactSetting>,
 }
 
 impl Context {
@@ -100,6 +104,8 @@ impl Context {
             remote_backend,
             wallet_alias: String::new(),
             backup: None,
+            key_identity_sigs: HashMap::new(),
+            contacts: Vec::new(),
         }
     }
 }

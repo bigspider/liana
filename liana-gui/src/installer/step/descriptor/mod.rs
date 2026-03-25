@@ -16,7 +16,11 @@ use liana_ui::{component::form, widget::Element};
 use async_hwi::DeviceKind;
 
 use crate::{
-    app::{settings::KeySetting, state::export::ExportModal, wallet::wallet_name},
+    app::{
+        settings::{ContactSetting, KeySetting},
+        state::export::ExportModal,
+        wallet::wallet_name,
+    },
     backup::Backup,
     export::{ImportExportMessage, ImportExportType, Progress},
     hw::{HardwareWallet, HardwareWallets},
@@ -259,6 +263,10 @@ pub struct RegisterDescriptor {
     /// whether a signing device is used, to explicit this step is not required if the user isn't
     /// using a signing device.
     created_desc: bool,
+    /// Identity signatures for descriptor keys: fingerprint → (id_pubkey_hex, id_sig_hex).
+    key_identity_sigs: HashMap<Fingerprint, (String, String)>,
+    /// Contacts with registered identity keys for the current wallet.
+    contacts: Vec<ContactSetting>,
 }
 
 impl RegisterDescriptor {
@@ -272,6 +280,8 @@ impl RegisterDescriptor {
             registered: Default::default(),
             error: Default::default(),
             done: Default::default(),
+            key_identity_sigs: Default::default(),
+            contacts: Default::default(),
         }
     }
 
@@ -292,6 +302,8 @@ impl Step for RegisterDescriptor {
             self.done = false;
         }
         self.descriptor.clone_from(&ctx.descriptor);
+        self.key_identity_sigs = ctx.key_identity_sigs.clone();
+        self.contacts = ctx.contacts.clone();
         let mut map = HashMap::new();
         for key in ctx.keys.values().filter(|k| !k.name.is_empty()) {
             map.insert(key.master_fingerprint, key.name.clone());
@@ -318,6 +330,9 @@ impl Step for RegisterDescriptor {
                                 *fingerprint,
                                 name,
                                 descriptor.to_string(),
+                                self.key_identity_sigs.clone(),
+                                self.contacts.clone(),
+                                descriptor.clone(),
                             ),
                             Message::WalletRegistered,
                         );
@@ -393,17 +408,146 @@ impl Step for RegisterDescriptor {
     }
 }
 
+/// Build the `registered_identities` and `key_signatures` parameters for
+/// `register_wallet_with_identities`.
+///
+/// Iterates over the descriptor keys (in descriptor order), and for each key that has an
+/// identity signature whose `id_pubkey` matches a saved contact, builds the corresponding
+/// `RegisteredIdentityEntry` and `IdentitySignature`.
+///
+/// Returns `(None, None)` if no key has a matching identity signature.
+fn build_identity_params(
+    descriptor: &LianaDescriptor,
+    key_identity_sigs: &HashMap<Fingerprint, (String, String)>,
+    contacts: &[ContactSetting],
+) -> (
+    Option<Vec<vnd_bitcoin_common::message::RegisteredIdentityEntry>>,
+    Option<Vec<Option<vnd_bitcoin_common::message::IdentitySignature>>>,
+) {
+    use liana::miniscript::descriptor::DescriptorPublicKey;
+    use liana::miniscript::{Descriptor, ForEachKey};
+
+    // Collect unique keys in wallet policy order (matching the device's key
+    // indexing). For Taproot descriptors, `for_each_key` visits script-tree
+    // keys *before* the internal key (see miniscript's `Tr::for_each_key`),
+    // but the wallet policy indexes the internal key as @0 (first in the
+    // descriptor string). We therefore handle Taproot explicitly.
+    // TODO: this is flaky, we should have a better way of doing it. Ideally, Liana might store the
+    // descriptor template and key info vector _instead_ of the descriptor, which would make the
+    // ordering of keys explicit and avoid the conversion.
+    let mut seen = HashSet::new();
+    let mut ordered_fingerprints = Vec::new();
+
+    let push_fingerprint =
+        |k: &DescriptorPublicKey, seen: &mut HashSet<Fingerprint>, out: &mut Vec<Fingerprint>| {
+            if let DescriptorPublicKey::MultiXPub(mxk) = k {
+                if let Some((fg, _)) = &mxk.origin {
+                    if seen.insert(*fg) {
+                        out.push(*fg);
+                    }
+                }
+            }
+        };
+
+    match descriptor.descriptor() {
+        Descriptor::Tr(tr) => {
+            // Internal key first (wallet policy @0).
+            push_fingerprint(tr.internal_key(), &mut seen, &mut ordered_fingerprints);
+            // Then script-tree keys in tree iteration order.
+            for (_depth, ms) in tr.iter_scripts() {
+                ms.for_each_key(|k| {
+                    push_fingerprint(k, &mut seen, &mut ordered_fingerprints);
+                    true
+                });
+            }
+        }
+        other => {
+            other.for_each_key(|k| {
+                push_fingerprint(k, &mut seen, &mut ordered_fingerprints);
+                true
+            });
+        }
+    }
+
+    let mut identities = Vec::new();
+    let mut signatures: Vec<Option<vnd_bitcoin_common::message::IdentitySignature>> = Vec::new();
+    let mut has_any = false;
+
+    for fg in &ordered_fingerprints {
+        if let Some((id_pubkey_hex, id_sig_hex)) = key_identity_sigs.get(fg) {
+            // Check if id_pubkey matches a saved contact with registrations
+            let contact = contacts.iter().find(|c| c.pubkey == *id_pubkey_hex);
+            if let Some(contact) = contact {
+                if let Some(reg) = contact.registrations.first() {
+                    if let (Ok(pk_bytes), Ok(sig_bytes), Ok(por_bytes)) = (
+                        hex::decode(id_pubkey_hex),
+                        hex::decode(id_sig_hex),
+                        hex::decode(&reg.proof),
+                    ) {
+                        // Add to registered identities (deduplicated)
+                        if !identities.iter().any(
+                            |ri: &vnd_bitcoin_common::message::RegisteredIdentityEntry| {
+                                ri.pubkey == pk_bytes
+                            },
+                        ) {
+                            identities.push(vnd_bitcoin_common::message::RegisteredIdentityEntry {
+                                pubkey: pk_bytes.clone(),
+                                name: contact.name.clone(),
+                                por: por_bytes,
+                            });
+                        }
+                        signatures.push(Some(vnd_bitcoin_common::message::IdentitySignature {
+                            identity_pubkey: pk_bytes,
+                            signature: sig_bytes,
+                        }));
+                        has_any = true;
+                        continue;
+                    }
+                }
+            }
+        }
+        signatures.push(None);
+    }
+
+    if has_any {
+        (Some(identities), Some(signatures))
+    } else {
+        (None, None)
+    }
+}
+
 async fn register_wallet(
     hw: std::sync::Arc<dyn async_hwi::HWI + Send + Sync>,
     fingerprint: Fingerprint,
     name: String,
     descriptor: String,
+    key_identity_sigs: HashMap<Fingerprint, (String, String)>,
+    contacts: Vec<ContactSetting>,
+    liana_descriptor: LianaDescriptor,
 ) -> Result<(Fingerprint, Option<[u8; 32]>), Error> {
-    let hmac = hw
-        .register_wallet(&name, &descriptor)
-        .await
-        .map_err(Error::from)?;
-    Ok((fingerprint, hmac))
+    // Check if any descriptor keys have identity signatures matching a saved contact.
+    let (registered_identities, key_signatures) =
+        build_identity_params(&liana_descriptor, &key_identity_sigs, &contacts);
+
+    if registered_identities.is_some() || key_signatures.is_some() {
+        let (reg_id, _por) = hw
+            .register_wallet_with_identities(
+                &name,
+                &descriptor,
+                registered_identities,
+                key_signatures,
+            )
+            .await
+            .map_err(Error::from)?;
+        // The registration ID is a 32-byte HMAC; convert it for storage.
+        Ok((fingerprint, Some(*reg_id.as_bytes())))
+    } else {
+        let hmac = hw
+            .register_wallet(&name, &descriptor)
+            .await
+            .map_err(Error::from)?;
+        Ok((fingerprint, hmac))
+    }
 }
 
 impl From<RegisterDescriptor> for Box<dyn Step> {

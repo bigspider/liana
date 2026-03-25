@@ -736,17 +736,24 @@ pub async fn import_xpub(
     file.read_to_string(&mut xpub_str)?;
     let xpub_str = xpub_str.trim().to_string();
 
+    // Strip identity suffix (?id_pubkey=...&id_sig=...) before parsing the xpub,
+    // but preserve it to pass through to the caller.
+    let (bare_xpub, id_suffix) = split_xpub_id_suffix(&xpub_str);
+
     let (descriptor_pubkey, key) =
-        if let Some(DescriptorPublicKey::XPub(key)) = parse_raw_xpub(&xpub_str) {
+        if let Some(DescriptorPublicKey::XPub(key)) = parse_raw_xpub(bare_xpub) {
             (DescriptorPublicKey::XPub(key.clone()), key)
-        } else if let Some(DescriptorPublicKey::XPub(key)) = parse_coldcard_xpub_json(&xpub_str) {
+        } else if let Some(DescriptorPublicKey::XPub(key)) = parse_coldcard_xpub_json(bare_xpub) {
             (DescriptorPublicKey::XPub(key.clone()), key)
-        } else if let Some(DescriptorPublicKey::XPub(key)) = parse_coldcard_xpub_ccxp(&xpub_str) {
+        } else if let Some(DescriptorPublicKey::XPub(key)) = parse_coldcard_xpub_ccxp(bare_xpub) {
             (DescriptorPublicKey::XPub(key.clone()), key)
         } else {
             return Err(Error::ParseXpub);
         };
-    let xpub_str = descriptor_pubkey.to_string();
+    let mut result_str = descriptor_pubkey.to_string();
+    if let Some(suffix) = id_suffix {
+        result_str = format!("{result_str}{suffix}");
+    }
 
     let valid = if network == Network::Bitcoin {
         key.xkey.network == Network::Bitcoin.into()
@@ -755,12 +762,40 @@ pub async fn import_xpub(
     };
     if valid {
         send_progress!(sender, Progress(100.0));
-        send_progress!(sender, Xpub(xpub_str));
+        send_progress!(sender, Xpub(result_str));
     } else {
         return Err(Error::XpubNetwork);
     }
 
     Ok(())
+}
+
+/// Split an xpub string into the bare xpub and an optional identity suffix.
+/// Supports both `?id_pubkey=<66hex>&id_sig=<128hex>` and `?id_pubkey=<66hex>&id_sig=<128hex>`.
+/// Returns `(bare_xpub, Some("?id_pubkey=...&id_sig=..."))` or `(original, None)`.
+pub fn split_xpub_id_suffix(xpub: &str) -> (&str, Option<String>) {
+    if let Some(idx) = xpub.find('?') {
+        let query = &xpub[idx + 1..];
+        let mut id_pubkey = None;
+        let mut id_sig = None;
+        for param in query.split('&') {
+            if let Some((key, value)) = param.split_once('=') {
+                match key {
+                    "id_pubkey" => id_pubkey = Some(value),
+                    "id_sig" => id_sig = Some(value),
+                    _ => {}
+                }
+            }
+        }
+        if let (Some(pk), Some(sig)) = (id_pubkey, id_sig) {
+            if pk.len() == 66 && sig.len() == 128 {
+                // Normalize to id_pubkey in the output
+                let suffix = format!("?id_pubkey={pk}&id_sig={sig}");
+                return (&xpub[..idx], Some(suffix));
+            }
+        }
+    }
+    (xpub, None)
 }
 
 pub fn parse_raw_xpub(raw_xpub: &str) -> Option<DescriptorPublicKey> {

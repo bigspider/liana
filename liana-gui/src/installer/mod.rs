@@ -404,7 +404,7 @@ impl Installer<'_, Message> for LianaInstaller {
         user_flow: UserFlow,
     ) -> (Box<LianaInstaller>, Task<Message>) {
         let signer = Arc::new(Mutex::new(Signer::generate(network).unwrap()));
-        let context = Context::new(
+        let mut context = Context::new(
             network,
             destination_path.clone(),
             remote_backend.map(RemoteBackend::WithoutWallet).unwrap_or(
@@ -416,6 +416,16 @@ impl Installer<'_, Message> for LianaInstaller {
                 },
             ),
         );
+        // Load contacts from existing wallet settings so they can be used
+        // during wallet registration with identity signatures.
+        let network_dir = destination_path.network_directory(network);
+        if let Ok(settings) = LianaSettings::from_file(&network_dir) {
+            context.contacts = settings
+                .wallets
+                .into_iter()
+                .flat_map(|w| w.contacts)
+                .collect();
+        }
         let mut installer = LianaInstaller {
             network,
             datadir: destination_path.clone(),
